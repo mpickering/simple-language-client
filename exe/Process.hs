@@ -73,7 +73,7 @@ createLSPProcess c p = do
             open <- H.hIsOpen h
             readable <- H.hIsReadable h
             when (open && readable) $ do
-              out <- BS.hGetSome h 3200
+              out <- BS.hGetSome h 32768
               if BS.null out
                 then return ()
                 else do
