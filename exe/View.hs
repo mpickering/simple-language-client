@@ -103,7 +103,7 @@ collectOutput clear out = foldDyn ($) "" $ leftmost [ flip mappend <$> out
                                                     , const "" <$ clear ]
 
 mkDebugOutput :: (Reflex t, MonadFix m, MonadHold t m, Show a)
-              => MessageIn t -> Process t a
+              => MessageIn t -> Process t a ByteString
               -> m (DebugCollection t)
 mkDebugOutput i p = do
   sout <- collectOutput never (BSU.fromString . show <$> _process_stdout p)

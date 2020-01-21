@@ -104,7 +104,8 @@ startSession cmd args caps rootDir iniFile = mdo
   diags <- mkDiags p
   return (Session debug diags p)
 
-mkDiags :: (Reflex t, MonadHold t m, MonadFix m) => Process t FromServerMessage -> m (Dynamic t DiagMap)
+mkDiags :: (Reflex t, MonadHold t m, MonadFix m) => LSPProcess t
+        -> m (Dynamic t DiagMap)
 mkDiags p = foldDyn update emptyDiagMap (_process_stdout p)
   where
     update :: FromServerMessage -> DiagMap -> DiagMap
@@ -156,7 +157,6 @@ mkClientState send messageIn = do
     c <- count messageIn
     return $ ClientState { sendRequest = send
                          , counter = c }
-
 
 
 

@@ -27,6 +27,8 @@ import qualified Data.Map as M
 type MessageOut t = Event t FromServerMessage
 type MessageIn t = Event t FromClientMessage
 
+type LSPProcess t = Process t FromServerMessage ByteString
+
 type DiagMap = M.Map Uri [Diagnostic]
 
 emptyDiagMap :: DiagMap
@@ -40,7 +42,7 @@ deleteDiag = M.delete
 
 data Session t = Session { debugCollection :: DebugCollection t
                          , diagnostics :: Dynamic t DiagMap
-                         , rawProcess :: Process t FromServerMessage
+                         , rawProcess :: LSPProcess t
                          }
 
 -- Information displayed in the debug pane

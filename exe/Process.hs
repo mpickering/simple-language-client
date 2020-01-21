@@ -38,7 +38,7 @@ createLSPProcess
   :: (MonadIO m, TriggerEvent t m, PerformEvent t m, MonadIO (Performable m))
   => CreateProcess
   -> ProcessConfig t FromClientMessage
-  -> m (Process t FromServerMessage)
+  -> m (Process t FromServerMessage ByteString)
 createLSPProcess c p = do
   reqVar <- liftIO (newMVar newRequestMap)
   createRedirectedProcess (input reqVar) (output reqVar) err c p

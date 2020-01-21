@@ -22,9 +22,9 @@ executable reflex-ghcide
   other-modules: Decoding, View, Types, Messages, Process
   -- other-extensions:
   build-depends:       base >=4.12 && <5
-                     , reflex-process
+                     , reflex-process >= 0.2
                      , filepath
-                     , reflex-fsnotify
+                     , reflex-fsnotify <= 0.1.0.0
                      , haskell-lsp
                      , haskell-lsp-types
                      , reflex
