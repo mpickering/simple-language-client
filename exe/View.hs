@@ -27,7 +27,7 @@ import qualified Data.Text.Zipper as TZ
 import Data.List
 
 import Language.Haskell.LSP.Types
-import Language.Haskell.LSP.Types.Lens (range, message)
+import Language.Haskell.LSP.Types.Lens (range, message, severity)
 import Control.Lens (view)
 
 import Reflex.Process
@@ -184,11 +184,23 @@ renderDiags w = map (renderDiag w)
 
 renderDiag :: Int -> (Uri, Diagnostic) -> V.Image
 renderDiag w (u, d) =
-  V.text V.defAttr (TL.fromStrict (getUri u))
+  (diagHeader (u, d))
   V.<->
-  (V.text V.defAttr (renderRange (view range d))
+  (V.pad 2 0 0 0 $ V.vertCat (wrap w (view message d)))
+
+diagHeader :: (Uri, Diagnostic) -> V.Image
+diagHeader (u, d) =
+  (V.text (diagStyle d) (renderRange (view range d)))
   V.<|> V.text V.defAttr ":"
-  V.<|> V.vertCat (wrap w (view message d)))
+  V.<|> V.text V.defAttr (TL.fromStrict (getUri u))
+
+diagStyle :: Diagnostic -> V.Attr
+diagStyle d = case view severity d of
+                Nothing -> V.defAttr
+                Just DsError -> V.withForeColor V.defAttr V.brightRed
+                Just DsWarning ->  V.withForeColor V.defAttr V.yellow
+                Just DsInfo -> V.withForeColor V.defAttr V.brightWhite
+                Just DsHint ->  V.withForeColor V.defAttr V.white
 
 wrap :: Int -> T.Text -> [V.Image]
 wrap maxWidth = concatMap (fmap (V.string V.defAttr . T.unpack) . TZ.wrapWithOffset maxWidth 0) . T.split (=='\n')
