@@ -11,6 +11,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 module View where
 
 import Control.Monad ((<=<), void)
@@ -90,13 +91,13 @@ scrollingOutputX
      , MonadHold t m
      , MonadFix m
      )
-  => Int -- ^ Fixed image height
-  -> Dynamic t [V.Image]
+  => Dynamic t [V.Image]
   -> VtyWidget t m ()
-scrollingOutputX fh out = do
+scrollingOutputX out = do
   dh <- displayHeight
   let scrollBy h (ix, n) =
         if | ix == 0 && n <= h -> Nothing -- Scrolled to the top and we don't have to scroll down
+           | ix + h >= n -> Nothing -- Reached the end, no more scrolling
            | n > h && n - ix - h == 0 -> Just 1
            | otherwise -> Nothing
   rec scroll <- scrollable (tagMaybe (scrollBy <$> current dh <*> scroll) $ updated out) $ (current out)
@@ -167,10 +168,10 @@ renderPosition (Position l c) = show l ++ ":" ++ show c
 
 diagnosticsPane :: (PostBuild t m, MonadNodeId m, MonadHold t m,
                        MonadFix m) => Session t -> VtyWidget t m ()
-diagnosticsPane s =
-  let ds = renderDiags . concatMap (\(k, v) -> map (k,) v) . M.toList
-            <$> diagnostics s
-  in void $ col $ stretch $ scrollingOutputX 5 $ ds
+diagnosticsPane s = do
+  dw <- displayWidth
+  let ds = concatMap (\(k, v) -> map (k,) v) . M.toList <$> diagnostics s
+  void $ col $ stretch $ scrollingOutputX $ (renderDiags <$> dw <*> ds)
 
 {-
 moduleString :: (Uri, [Diagnostic]) -> String
@@ -178,14 +179,16 @@ moduleString (uri, ds) =
   unlines [T.unpack (getUri uri), renderDiags ds]
   -}
 
-renderDiags :: [(Uri, Diagnostic)] -> [V.Image]
-renderDiags = map renderDiag
+renderDiags :: Int -> [(Uri, Diagnostic)] -> [V.Image]
+renderDiags w = map (renderDiag w)
 
-renderDiag :: (Uri, Diagnostic) -> V.Image
-renderDiag (u, d) =
-  V.text V.defAttr (renderRange (view range d))
+renderDiag :: Int -> (Uri, Diagnostic) -> V.Image
+renderDiag w (u, d) =
+  V.text V.defAttr (TL.fromStrict (getUri u))
+  V.<->
+  (V.text V.defAttr (renderRange (view range d))
   V.<|> V.text V.defAttr ":"
-  V.<|> V.vertCat (wrap 80 (view message d))
+  V.<|> V.vertCat (wrap w (view message d)))
 
 wrap :: Int -> T.Text -> [V.Image]
 wrap maxWidth = concatMap (fmap (V.string V.defAttr . T.unpack) . TZ.wrapWithOffset maxWidth 0) . T.split (=='\n')
@@ -204,9 +207,9 @@ scrollable
   -- ^ Number of items to scroll by
   -> Behavior t ([V.Image])
   -> VtyWidget t m (Behavior t (Int, Int))
-  -- ^ (Current scroll position, total number of items)
+  -- ^ (Current scroll position, total number of lines)
 scrollable scrollBy imgs = do
---  dw <- displayWidth
+  dh <- displayHeight
 --  let imgs = wrap <$> current dw <*> t
   kup <- key V.KUp
   kdown <- key V.KDown
@@ -222,8 +225,13 @@ scrollable scrollBy imgs = do
         ]
       updateLine maxN delta ix = min (max 0 (ix + delta)) maxN
   lineIndex :: Dynamic t Int
-    <- foldDyn (\(maxN, delta) ix -> updateLine (maxN - 1) delta ix) 0 $
-        attach (length <$> imgs) requestedScroll
-  tellImages $ fmap ((:[]) . V.vertCat) $ drop <$> current lineIndex <*> imgs
-  return $ (,) <$> ((+) <$> current lineIndex <*> pure 1) <*> (length <$> imgs)
+    <- foldDyn (\(h, (maxN, delta)) ix -> updateLine (maxN - h) delta ix) 0 $
+        attach (current dh) (attach (sum . map V.imageHeight <$> imgs) requestedScroll)
+  tellImage $ (t <$> current lineIndex <*> (V.vertCat <$> imgs))
+  return $ (,) <$> ((+ 1) <$> current lineIndex) <*> (sum . map V.imageHeight <$> imgs)
   where
+--    addLen is = V.string V.defAttr (show (sum (map V.imageHeight is))) : is
+    t ln i = V.translate 0 (negate ln) i
+
+tellImage :: ImageWriter t m => Behavior t V.Image -> m ()
+tellImage i = tellImages ((:[]) <$> i)
