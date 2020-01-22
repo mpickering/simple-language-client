@@ -7,15 +7,22 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 module View where
 
-import Control.Monad ((<=<))
+import Control.Monad ((<=<), void)
 import Control.Monad.Fix (MonadFix)
 import Data.ByteString (ByteString)
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.UTF8 as BSU      -- from utf8-string
 import qualified Data.Map as M
+import qualified Graphics.Vty as V
+import qualified Data.Text.Zipper as TZ
 import Data.List
 
 import Language.Haskell.LSP.Types
@@ -77,6 +84,24 @@ scrollingOutput out = do
         T.decodeUtf8 <$> current out
   return ()
 
+scrollingOutputX
+  :: ( Reflex t
+     , Monad m
+     , MonadHold t m
+     , MonadFix m
+     )
+  => Int -- ^ Fixed image height
+  -> Dynamic t [V.Image]
+  -> VtyWidget t m ()
+scrollingOutputX fh out = do
+  dh <- displayHeight
+  let scrollBy h (ix, n) =
+        if | ix == 0 && n <= h -> Nothing -- Scrolled to the top and we don't have to scroll down
+           | n > h && n - ix - h == 0 -> Just 1
+           | otherwise -> Nothing
+  rec scroll <- scrollable (tagMaybe (scrollBy <$> current dh <*> scroll) $ updated out) $ (current out)
+  return ()
+
 debugView
   :: ( MonadNodeId m
      , PostBuild t m
@@ -111,6 +136,7 @@ mkDebugOutput i p = do
   serr <- collectOutput never (_process_stderr p)
   return $ DebugCollection (current sout) (current iout) (current serr)
 
+{-
 diagnosticsPane :: (PostBuild t m, MonadNodeId m, MonadHold t m,
                        MonadFix m) => Session t -> VtyWidget t m ()
 diagnosticsPane s =
@@ -127,13 +153,77 @@ moduleString (uri, ds) =
   unlines [T.unpack (getUri uri), renderDiags ds]
 
 renderDiags :: [Diagnostic] -> String
-renderDiags = unlines . map renderDiag
+renderDiags = unlines . intersperse "" . map renderDiag
 
 renderDiag :: Diagnostic -> String
-renderDiag d = renderRange (view range d) <> ":" <> show (view message d)
+renderDiag d = renderRange (view range d) <> ":" <> T.unpack (view message d)
 
 renderRange :: Range -> String
 renderRange (Range s e) = renderPosition s ++ "-" ++ renderPosition e
 
 renderPosition :: Position -> String
 renderPosition (Position l c) = show l ++ ":" ++ show c
+-}
+
+diagnosticsPane :: (PostBuild t m, MonadNodeId m, MonadHold t m,
+                       MonadFix m) => Session t -> VtyWidget t m ()
+diagnosticsPane s =
+  let ds = renderDiags . concatMap (\(k, v) -> map (k,) v) . M.toList
+            <$> diagnostics s
+  in void $ col $ stretch $ scrollingOutputX 5 $ ds
+
+{-
+moduleString :: (Uri, [Diagnostic]) -> String
+moduleString (uri, ds) =
+  unlines [T.unpack (getUri uri), renderDiags ds]
+  -}
+
+renderDiags :: [(Uri, Diagnostic)] -> [V.Image]
+renderDiags = map renderDiag
+
+renderDiag :: (Uri, Diagnostic) -> V.Image
+renderDiag (u, d) =
+  V.text V.defAttr (renderRange (view range d))
+  V.<|> V.text V.defAttr ":"
+  V.<|> V.vertCat (wrap 80 (view message d))
+
+wrap :: Int -> T.Text -> [V.Image]
+wrap maxWidth = concatMap (fmap (V.string V.defAttr . T.unpack) . TZ.wrapWithOffset maxWidth 0) . T.split (=='\n')
+
+renderRange :: Range -> TL.Text
+renderRange (Range s e) = renderPosition s <> "-" <> renderPosition e
+
+renderPosition :: Position -> TL.Text
+renderPosition (Position l c) = TL.pack (show l) <> ":" <> TL.pack (show c)
+
+-- | Scrollable text widget. The output pair exposes the current scroll position and total number of lines (including those
+-- that are hidden)
+scrollable
+  :: forall t m. (Reflex t, MonadHold t m, MonadFix m)
+  => Event t Int
+  -- ^ Number of items to scroll by
+  -> Behavior t ([V.Image])
+  -> VtyWidget t m (Behavior t (Int, Int))
+  -- ^ (Current scroll position, total number of items)
+scrollable scrollBy imgs = do
+--  dw <- displayWidth
+--  let imgs = wrap <$> current dw <*> t
+  kup <- key V.KUp
+  kdown <- key V.KDown
+  m <- mouseScroll
+  let requestedScroll :: Event t Int
+      requestedScroll = leftmost
+        [ 1 <$ kdown
+        , (-1) <$ kup
+        , ffor m $ \case
+            ScrollDirection_Up -> (-1)
+            ScrollDirection_Down -> 1
+        , scrollBy
+        ]
+      updateLine maxN delta ix = min (max 0 (ix + delta)) maxN
+  lineIndex :: Dynamic t Int
+    <- foldDyn (\(maxN, delta) ix -> updateLine (maxN - 1) delta ix) 0 $
+        attach (length <$> imgs) requestedScroll
+  tellImages $ fmap ((:[]) . V.vertCat) $ drop <$> current lineIndex <*> imgs
+  return $ (,) <$> ((+) <$> current lineIndex <*> pure 1) <*> (length <$> imgs)
+  where

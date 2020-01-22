@@ -232,10 +232,8 @@ main = do
 
     let home = col $ do
           stretch $ col $ do
-            fixed 1 $ text "Esc will bring you back here."
-            fixed 1 $ text "Ctrl+c to quit."
-            fixed 1 $ text "d - debug panes"
             stretch $ diagnosticsPane session
+            fixed 3 $ boxStatic def $ text "reflex-ghcide: C-c - quit; d - debug"
           return $ leftmost
             [ Left () <$ d
             ]
@@ -249,7 +247,6 @@ main = do
           return $ fforMaybe i $ \case
             V.EvKey V.KEsc [] -> Just $ Right ()
             _ -> Nothing
-
 
     return $ () <$ exit
 
