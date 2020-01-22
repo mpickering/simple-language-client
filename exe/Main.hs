@@ -31,6 +31,7 @@ import System.Directory
 import Reflex.FSNotify (watchDirectory)
 import qualified System.FSNotify as FS
 import System.FilePath
+import System.FilePath.Find
 
 import Reflex.Vty
 
@@ -51,6 +52,38 @@ import View
 getCurrentProcessID :: Num b => IO b
 getCurrentProcessID = fromIntegral <$> System.Posix.Process.getProcessID
 
+getHSFiles ::  FilePath -> IO [FilePath]
+getHSFiles = findWithHandler (\_ _ -> return []) always
+              (extension ==? ".hs"
+                ||? extension ==? ".lhs")
+
+
+-- | If the path is a directory then find all files in that directory,
+-- otherwise just load the single file
+pathToFiles :: FilePath -> FilePath -> IO [FilePath]
+pathToFiles root_dir spec = do
+  let dpath = if isRelative spec
+                then root_dir </> spec
+                else spec
+  dexist <- doesDirectoryExist dpath
+  if dexist
+    then getHSFiles dpath
+    -- Probably a file
+    else return [dpath]
+
+watchHSDirectory :: (PostBuild t m, TriggerEvent t m, PerformEvent t m,
+                       MonadIO (Performable m)) => FilePath -> m (Event t FS.Event)
+watchHSDirectory absRootDir = do
+  -- TODO: Separate the filesystem event logic into its own function
+  -- Watch the project directory for changes
+  pb <- getPostBuild
+  fsEvents <- watchDirectory (noDebounce FS.defaultConfig) (absRootDir <$ pb)
+
+  let filteredFsEvents = flip ffilter fsEvents $ \e ->
+        takeExtension (FS.eventPath e) `elem` [".hs", ".lhs"]
+  return filteredFsEvents
+
+
 startSession :: (Reflex t
                 , TriggerEvent t m
                 , PerformEvent t m
@@ -66,7 +99,7 @@ startSession :: (Reflex t
                 -> FilePath
                 -> FilePath
                 -> m (Session t)
-startSession cmd args caps rootDir iniFile = mdo
+startSession cmd args caps rootDir target = mdo
   pid <- liftIO $ getCurrentProcessID
   absRootDir <- liftIO $ canonicalizePath rootDir
   let initializeParams = InitializeParams (Just pid)
@@ -76,27 +109,31 @@ startSession cmd args caps rootDir iniFile = mdo
                                         caps
                                         (Just TraceOff)
                                         Nothing
-  -- TODO: Separate the filesystem event logic into its own function
-  -- Watch the project directory for changes
-  pb <- getPostBuild
-  fsEvents <- watchDirectory (noDebounce FS.defaultConfig) (absRootDir <$ pb)
 
-  let filteredFsEvents = flip ffilter fsEvents $ \e ->
-        takeExtension (FS.eventPath e) `elem` [".hs", ".lhs"]
-  docOpen <- performEvent (liftIO . fsNotifyToRequest <$> filteredFsEvents)
+  -- Start watching the root directory for changes
+  hsEvents <- watchHSDirectory absRootDir
+  docModify <- performEvent (liftIO . fsNotifyToRequest <$> hsEvents)
+  -- Make an event which can be triggered manually
   (messageIn, sendMessage) <- mkMessageIn
-  let in_message = leftmost [messageIn, docOpen]
+
+  let in_message = leftmost [messageIn, docModify]
 
   let process =  proc cmd args
       processConfig =
         ProcessConfig
           (attachPromptlyDynWith (\b a -> (a (IdInt b))) (counter st) in_message)
           never
+
+  -- Start language server
   p <- createLSPProcess process processConfig
 
+  -- Send initialisation request
   liftIO $ sendMessage (mkInitialiseRequest initializeParams)
-  liftIO $ sendMessage =<< (openFile iniFile)
 
+  -- Open all files as specified by the target
+  liftIO $ do
+    iniFiles <-  pathToFiles absRootDir target
+    mapM_ (\iniFile -> sendMessage =<< (openFile iniFile)) iniFiles
 
   st <- mkClientState sendMessage in_message
 
@@ -122,18 +159,13 @@ mkInitialiseRequest p i = ReqInitialize (RequestMessage "2.0" i Initialize p)
 fsNotifyToRequest :: FS.Event -> IO (LspId -> FromClientMessage)
 fsNotifyToRequest e = do
   t <- T.readFile (FS.eventPath e)
-  -- HACK, shouldn't use IdInt like this
+  -- HACK, shouldn't use IdInt like this but need to increment the version
+  -- each time.
   return $ \(IdInt i) -> NotDidChangeTextDocument (NotificationMessage "2.0" TextDocumentDidChange
     (DidChangeTextDocumentParams
       (VersionedTextDocumentIdentifier (filePathToUri (FS.eventPath e)) (Just i))
       (List [TextDocumentContentChangeEvent Nothing Nothing t])
       ))
-
-{-
-  NotDidSaveTextDocument (NotificationMessage "2.0" TextDocumentDidSave
-    (DidSaveTextDocumentParams
-      (TextDocumentIdentifier (filePathToUri (FS.eventPath e)))))
-      -}
 
 
 openFile :: FilePath -> IO (LspId -> FromClientMessage)
@@ -148,7 +180,6 @@ mkMessageIn :: TriggerEvent t m
                  , (LspId -> FromClientMessage) -> IO () )
 mkMessageIn = newTriggerEvent
 
-
 mkClientState :: (Reflex t, MonadHold t m, MonadFix m)
               => ((LspId -> FromClientMessage) -> IO ())
               -> Event t a
@@ -159,17 +190,17 @@ mkClientState send messageIn = do
                          , counter = c }
 
 
-
 data ClientArg = ClientArg
   { _clientArg_serverCommand :: String
   , _clientArg_files :: FilePath
+  , _clientArg_root_dir :: Maybe FilePath
   }
 
 ghciArg :: Parser ClientArg
 ghciArg = ClientArg
   <$> strOption
-    ( long "path" <>
-      short 'p' <>
+    ( long "server" <>
+      short 's' <>
       help "Path to the language server" <>
       showDefault <>
       value "ghcide"
@@ -179,27 +210,25 @@ ghciArg = ClientArg
       help "The directory containing the source files to load"
       <> metavar "DIR"
     )
+  <*> optional (strOption (long "root-dir" <> help "Path to root dir"))
 
 
 main :: IO ()
 main = do
-    {-
   let opts = info (ghciArg <**> helper) $ mconcat
         [ fullDesc
         , progDesc "A language client powered by fsnotify"
        , header "Welcome to reflex-ghcide"
         ]
-        -}
---  ClientArg { _clientArg_serverCommand = _cmd, _clientArg_files = _file_dir } <- execParser opts
-  let root_dir = "/home/matt/ghcide" :: String
+  ClientArg { _clientArg_serverCommand = cmd
+            , _clientArg_files = file_dir
+            , _clientArg_root_dir = mroot_dir } <- execParser opts
+  root_dir <- maybe getCurrentDirectory return mroot_dir
   mainWidget $ mdo
     exit <- keyCombo (V.KChar 'c', [V.MCtrl])
     d <- key (V.KChar 'd')
 
-    let file_dir = "/home/matt/ghcide/src/Development/IDE/Core/Rules.hs"
-        cmd = "/home/matt/ghcide/dist-newstyle/build/x86_64-linux/ghc-8.6.5/ghcide-0.0.6/x/ghcide/build/ghcide/ghcide"
     session <- startSession cmd ["--lsp"] def root_dir file_dir
-
 
     let home = col $ do
           stretch $ col $ do
@@ -220,7 +249,6 @@ main = do
           return $ fforMaybe i $ \case
             V.EvKey V.KEsc [] -> Just $ Right ()
             _ -> Nothing
-
 
 
     return $ () <$ exit
