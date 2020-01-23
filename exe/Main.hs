@@ -37,6 +37,7 @@ import Reflex.Vty
 
 import qualified Graphics.Vty.Input as V
 import qualified Data.Text.IO as T
+import qualified Data.Map as M
 
 import Reflex.Network
 
@@ -155,15 +156,32 @@ mkDiags p = foldDyn update emptyDiagMap (_process_stdout p)
     update _ d = d
 
 mkStatus :: (Reflex t, MonadHold t m, MonadFix m) => LSPProcess t
-        -> m (Dynamic t T.Text)
-mkStatus p = foldDyn update "" (_process_stdout p)
+        -> m (Dynamic t ProgressStatus)
+mkStatus p = foldDyn update (ProgressStatus "" M.empty) (_process_stdout p)
   where
-    update :: FromServerMessage -> T.Text -> T.Text
-    update (NotWorkDoneProgressBegin (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressBeginParams tit mc mm mp)))) t = fromMaybe "" mm
-    update (NotWorkDoneProgressReport (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressReportParams mc mm mp)))) t = fromMaybe "" mm
-    update (NotWorkDoneProgressEnd (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressEndParams mm)))) t = fromMaybe "" mm
+    update :: FromServerMessage -> ProgressStatus -> ProgressStatus
+    update (NotWorkDoneProgressBegin (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressBeginParams tit mc mm mp)))) (ProgressStatus t ps) =
+      ProgressStatus (renderProgress tit mm mp) (M.insert tok tit ps)
+    update (NotWorkDoneProgressReport (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressReportParams mc mm mp)))) prog@(ProgressStatus t ps) =
+      let mtit = M.lookup tok ps
+      in case mtit of
+           -- This case should never happen
+           Nothing -> prog
+           Just tit -> ProgressStatus (renderProgress tit mm mp) ps
+
+    update (NotWorkDoneProgressEnd (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressEndParams mm)))) (ProgressStatus t ps) =
+      let ps' = M.delete tok ps
+      in if M.null ps'
+          then ProgressStatus "" ps'
+          else ProgressStatus t ps
 
     update _ d = d
+
+renderProgress :: T.Text -> Maybe T.Text -> Maybe Double -> T.Text
+renderProgress head mm mp = p <> head <> m
+  where
+    p = fromMaybe "" ((<> " ") . T.pack . show <$> mp)
+    m = fromMaybe "" ((": " <>) <$> mm)
 
 mkInitialiseRequest :: InitializeParams -> (LspId -> FromClientMessage)
 mkInitialiseRequest p i = ReqInitialize (RequestMessage "2.0" i Initialize p)
@@ -248,7 +266,7 @@ main = do
     let home = col $ do
           stretch $ col $ do
             stretch $ diagnosticsPane session
-            fixed 3 $ boxStatic def $ text (current $ status session)
+            fixed 3 $ boxStatic def $ text (current (currentMessage <$> status session))
             fixed 3 $ boxStatic def $ text "reflex-ghcide: C-c - quit; d - debug"
           return $ leftmost
             [ Left () <$ d

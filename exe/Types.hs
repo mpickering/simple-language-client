@@ -32,6 +32,11 @@ type LSPProcess t = Process t FromServerMessage ByteString
 
 type DiagMap = M.Map Uri [Diagnostic]
 
+data ProgressStatus = ProgressStatus
+                        { currentMessage :: Text
+                        , progresses :: M.Map ProgressToken Text
+                        }
+
 emptyDiagMap :: DiagMap
 emptyDiagMap = M.empty
 
@@ -43,7 +48,7 @@ deleteDiag = M.delete
 
 data Session t = Session { debugCollection :: DebugCollection t
                          , diagnostics :: Dynamic t DiagMap
-                         , status :: Dynamic t Text
+                         , status :: Dynamic t ProgressStatus
                          , rawProcess :: LSPProcess t
                          }
 
