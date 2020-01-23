@@ -16,7 +16,7 @@ module Main where
 - 3. Send a notification to the server on a file change
 - 4. Display the diagnostics when ghcide reports them
 -}
-
+import Data.Maybe
 import Language.Haskell.LSP.Messages
 import Language.Haskell.LSP.Types
 import Data.Default
@@ -139,7 +139,8 @@ startSession cmd args caps rootDir target = mdo
 
   debug <- mkDebugOutput (_processConfig_stdin processConfig) p
   diags <- mkDiags p
-  return (Session debug diags p)
+  status <- mkStatus p
+  return (Session debug diags status p)
 
 mkDiags :: (Reflex t, MonadHold t m, MonadFix m) => LSPProcess t
         -> m (Dynamic t DiagMap)
@@ -150,6 +151,17 @@ mkDiags p = foldDyn update emptyDiagMap (_process_stdout p)
       = case ds of
           [] -> deleteDiag uri d
           _ -> addDiag uri ds d
+
+    update _ d = d
+
+mkStatus :: (Reflex t, MonadHold t m, MonadFix m) => LSPProcess t
+        -> m (Dynamic t T.Text)
+mkStatus p = foldDyn update "" (_process_stdout p)
+  where
+    update :: FromServerMessage -> T.Text -> T.Text
+    update (NotWorkDoneProgressBegin (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressBeginParams tit mc mm mp)))) t = fromMaybe "" mm
+    update (NotWorkDoneProgressReport (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressReportParams mc mm mp)))) t = fromMaybe "" mm
+    update (NotWorkDoneProgressEnd (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressEndParams mm)))) t = fromMaybe "" mm
 
     update _ d = d
 
@@ -213,6 +225,9 @@ ghciArg = ClientArg
   <*> optional (strOption (long "root-dir" <> help "Path to root dir"))
 
 
+reflexGhcideCaps :: ClientCapabilities
+reflexGhcideCaps = def { _window = Just (WindowClientCapabilities (Just True)) }
+
 main :: IO ()
 main = do
   let opts = info (ghciArg <**> helper) $ mconcat
@@ -228,11 +243,12 @@ main = do
     exit <- keyCombo (V.KChar 'c', [V.MCtrl])
     d <- key (V.KChar 'd')
 
-    session <- startSession cmd ["--lsp"] def root_dir file_dir
+    session <- startSession cmd ["--lsp"] reflexGhcideCaps root_dir file_dir
 
     let home = col $ do
           stretch $ col $ do
             stretch $ diagnosticsPane session
+            fixed 3 $ boxStatic def $ text (current $ status session)
             fixed 3 $ boxStatic def $ text "reflex-ghcide: C-c - quit; d - debug"
           return $ leftmost
             [ Left () <$ d

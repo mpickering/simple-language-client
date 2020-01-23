@@ -21,6 +21,7 @@ import Data.ByteString (ByteString)
 
 
 import qualified Data.Map as M
+import Data.Text (Text)
 
 
 
@@ -42,6 +43,7 @@ deleteDiag = M.delete
 
 data Session t = Session { debugCollection :: DebugCollection t
                          , diagnostics :: Dynamic t DiagMap
+                         , status :: Dynamic t Text
                          , rawProcess :: LSPProcess t
                          }
 
