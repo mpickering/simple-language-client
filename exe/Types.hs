@@ -33,8 +33,8 @@ type LSPProcess t = Process t FromServerMessage ByteString
 type DiagMap = M.Map Uri [Diagnostic]
 
 data ProgressStatus = ProgressStatus
-                        { currentMessage :: Text
-                        , progresses :: M.Map ProgressToken Text
+                        { currentMessage :: !Text
+                        , progresses :: !(M.Map ProgressToken Text)
                         }
 
 emptyDiagMap :: DiagMap
