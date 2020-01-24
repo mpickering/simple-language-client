@@ -12,6 +12,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE ViewPatterns #-}
 module View where
 
 import Control.Monad ((<=<), void)
@@ -98,7 +99,7 @@ scrollingOutputX out = do
   let scrollBy h (ix, n) =
         if | ix == 0 && n <= h -> Nothing -- Scrolled to the top and we don't have to scroll down
            | ix + h >= n -> Nothing -- Reached the end, no more scrolling
-           | n > h && n - ix - h == 0 -> Just 1
+           | n > h && n - ix - h == 0 -> Just (ScrollLine 1)
            | otherwise -> Nothing
   rec scroll <- scrollable (tagMaybe (scrollBy <$> current dh <*> scroll) $ updated out) $ (current out)
   return ()
@@ -211,38 +212,62 @@ renderRange (Range s e) = renderPosition s <> "-" <> renderPosition e
 renderPosition :: Position -> TL.Text
 renderPosition (Position l c) = TL.pack (show l) <> ":" <> TL.pack (show c)
 
+data ScrollEvent = ScrollItemDown | ScrollItemUp | ScrollLine Int
+
 -- | Scrollable text widget. The output pair exposes the current scroll position and total number of lines (including those
 -- that are hidden)
 scrollable
   :: forall t m. (Reflex t, MonadHold t m, MonadFix m)
-  => Event t Int
+  => Event t ScrollEvent
   -- ^ Number of items to scroll by
   -> Behavior t ([V.Image])
   -> VtyWidget t m (Behavior t (Int, Int))
   -- ^ (Current scroll position, total number of lines)
 scrollable scrollBy imgs = do
   dh <- displayHeight
---  let imgs = wrap <$> current dw <*> t
   kup <- key V.KUp
   kdown <- key V.KDown
+  pup <- key V.KPageUp
+  pdown <- key V.KPageDown
   m <- mouseScroll
-  let requestedScroll :: Event t Int
+  let requestedScroll :: Event t ScrollEvent
       requestedScroll = leftmost
-        [ 1 <$ kdown
-        , (-1) <$ kup
+        [ ScrollItemDown <$ kdown
+        , ScrollItemUp <$ kup
+        , ScrollLine 20 <$ pdown
+        , ScrollLine (-20) <$ pup
         , ffor m $ \case
-            ScrollDirection_Up -> (-1)
-            ScrollDirection_Down -> 1
+            ScrollDirection_Up -> ScrollLine (-1)
+            ScrollDirection_Down -> ScrollLine 1
         , scrollBy
         ]
-      updateLine maxN delta ix = min (max 0 (ix + delta)) maxN
+      updateLine :: [Int] -> Int -> ScrollEvent -> Int -> Int
+      updateLine hs dh se ix =
+        let maxN = (sum hs - dh)
+            steps = scanl' (+) 0 hs
+        in
+        case se of
+          ScrollLine delta -> min (max 0 (ix + delta)) maxN
+          -- Find the next item which starts on a line more than the
+          -- current line
+          ScrollItemDown ->  case dropWhile (<= ix) steps of
+                               -- No more steps, stay in the same place
+                               [] -> ix
+                               (s:_) -> s
+          -- Find the previous item which starts on a line less than the
+          -- current line
+          ScrollItemUp -> case takeWhile (< ix) steps of
+                            [] -> 0
+                            (last -> s) -> s
+
+
   lineIndex :: Dynamic t Int
-    <- foldDyn (\(h, (maxN, delta)) ix -> updateLine (maxN - h) delta ix) 0 $
-        attach (current dh) (attach (sum . map V.imageHeight <$> imgs) requestedScroll)
+    <- foldDyn (\(h, (hs, delta)) ix -> updateLine hs h delta ix) 0 $
+        attach (current dh) (attach (map V.imageHeight <$> imgs) requestedScroll)
   tellImage $ (t <$> current lineIndex <*> (V.vertCat <$> imgs))
   return $ (,) <$> ((+ 1) <$> current lineIndex) <*> (sum . map V.imageHeight <$> imgs)
   where
---    addLen is = V.string V.defAttr (show (sum (map V.imageHeight is))) : is
+    --addLen is = V.string V.defAttr (show (scanr (+) 0 (map V.imageHeight is))) : is
     t ln i = V.translate 0 (negate ln) i
 
 tellImage :: ImageWriter t m => Behavior t V.Image -> m ()
