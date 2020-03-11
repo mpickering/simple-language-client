@@ -44,6 +44,7 @@ executable reflex-ghcide
                      , utf8-string
                      , containers
                      , filemanip
+                     , extra
   hs-source-dirs: exe
   default-language:    Haskell2010
   ghc-options: -threaded -Wall

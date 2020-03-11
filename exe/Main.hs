@@ -16,6 +16,7 @@ module Main where
 - 3. Send a notification to the server on a file change
 - 4. Display the diagnostics when ghcide reports them
 -}
+import Control.Monad.Extra
 import Data.Maybe
 import Language.Haskell.LSP.Messages
 import Language.Haskell.LSP.Types
@@ -135,7 +136,7 @@ startSession exit cmd args caps rootDir targets = mdo
 
   -- Open all files as specified by the target
   liftIO $ do
-    iniFiles <-  pathToFiles absRootDir target
+    iniFiles <-  concatMapM (pathToFiles absRootDir) targets
     mapM_ (\iniFile -> sendMessage =<< (openFile iniFile)) iniFiles
 
   st <- mkClientState sendMessage in_message
@@ -224,7 +225,7 @@ mkClientState send messageIn = do
 
 data ClientArg = ClientArg
   { _clientArg_serverCommand :: String
-  , _clientArg_files :: FilePath
+  , _clientArg_files :: [FilePath]
   , _clientArg_root_dir :: Maybe FilePath
   }
 
@@ -237,11 +238,11 @@ ghciArg = ClientArg
       showDefault <>
       value "ghcide"
     )
-  <*> argument str
+  <*> some (argument str
     (
       help "The directory containing the source files to load"
       <> metavar "DIR"
-    )
+    ))
   <*> optional (strOption (long "root-dir" <> help "Path to root dir"))
 
 
