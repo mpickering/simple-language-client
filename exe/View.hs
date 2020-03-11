@@ -126,7 +126,7 @@ collectOutput
   -> Event t ByteString
   -- ^ Output to add
   -> m (Dynamic t ByteString)
-collectOutput clear out = foldDyn ($) "" $ leftmost [ flip mappend <$> out
+collectOutput clear out = foldDyn ($) "" $ leftmost [ mappend <$> out
                                                     , const "" <$ clear ]
 
 mkDebugOutput :: (Reflex t, MonadFix m, MonadHold t m, Show a)
