@@ -32,6 +32,7 @@ import Reflex.FSNotify (watchDirectory)
 import qualified System.FSNotify as FS
 import System.FilePath
 import System.FilePath.Find
+import System.Posix.Signals
 
 import Reflex.Vty
 
@@ -94,13 +95,14 @@ startSession :: (Reflex t
                 , MonadIO (Performable m)
                 , PostBuild t m
                 , MonadFix m)
-                => String
+                => Event t ()
+                -> String
                 -> [String]
                 -> ClientCapabilities
                 -> FilePath
-                -> FilePath
+                -> [FilePath]
                 -> m (Session t)
-startSession cmd args caps rootDir target = mdo
+startSession exit cmd args caps rootDir targets = mdo
   pid <- liftIO $ getCurrentProcessID
   absRootDir <- liftIO $ canonicalizePath rootDir
   let initializeParams = InitializeParams (Just pid)
@@ -123,7 +125,7 @@ startSession cmd args caps rootDir target = mdo
       processConfig =
         ProcessConfig
           (attachPromptlyDynWith (\b a -> (a (IdInt b))) (counter st) in_message)
-          never
+          (sigINT <$ exit)
 
   -- Start language server
   p <- createLSPProcess process processConfig
@@ -258,10 +260,10 @@ main = do
             , _clientArg_root_dir = mroot_dir } <- execParser opts
   root_dir <- maybe getCurrentDirectory return mroot_dir
   mainWidget $ mdo
-    exit <- keyCombo (V.KChar 'c', [V.MCtrl])
+    exit <- (() <$) <$> keyCombo (V.KChar 'c', [V.MCtrl])
     d <- key (V.KChar 'd')
 
-    session <- startSession cmd ["--lsp"] reflexGhcideCaps root_dir file_dir
+    session <- startSession exit cmd ["--lsp"] reflexGhcideCaps root_dir file_dir
 
     let home = col $ do
           stretch $ col $ do
@@ -282,7 +284,7 @@ main = do
             V.EvKey V.KEsc [] -> Just $ Right ()
             _ -> Nothing
 
-    return $ () <$ exit
+    return exit
 
 noDebounce :: FS.WatchConfig -> FS.WatchConfig
 noDebounce cfg = cfg { FS.confDebounce = FS.NoDebounce }
