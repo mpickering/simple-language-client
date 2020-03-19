@@ -34,6 +34,10 @@ import qualified System.FSNotify as FS
 import System.FilePath
 import System.FilePath.Find
 import System.Posix.Signals
+import Control.Retry
+import Control.Monad.Catch (Handler(..))
+
+import Control.Exception hiding (Handler(..))
 
 import Reflex.Vty
 
@@ -191,7 +195,7 @@ mkInitialiseRequest p i = ReqInitialize (RequestMessage "2.0" i Initialize p)
 
 fsNotifyToRequest :: FS.Event -> IO (LspId -> FromClientMessage)
 fsNotifyToRequest e = do
-  t <- T.readFile (FS.eventPath e)
+  t <- readFileRetry (FS.eventPath e)
   -- HACK, shouldn't use IdInt like this but need to increment the version
   -- each time.
   return $ \(IdInt i) -> NotDidChangeTextDocument (NotificationMessage "2.0" TextDocumentDidChange
@@ -199,6 +203,14 @@ fsNotifyToRequest e = do
       (VersionedTextDocumentIdentifier (filePathToUri (FS.eventPath e)) (Just i))
       (List [TextDocumentContentChangeEvent Nothing Nothing t])
       ))
+
+
+readFileRetry :: FilePath -> IO T.Text
+readFileRetry fp =
+  let policy = limitRetries 3
+  in recovering policy
+             [\_ -> Handler (\(_e :: IOException) -> return True)]
+             (\_ -> T.readFile fp)
 
 
 openFile :: FilePath -> IO (LspId -> FromClientMessage)
