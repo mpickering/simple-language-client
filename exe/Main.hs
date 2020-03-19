@@ -44,6 +44,7 @@ import Reflex.Vty
 import qualified Graphics.Vty.Input as V
 import qualified Data.Text.IO as T
 import qualified Data.Map as M
+import qualified Data.Set as Set
 
 import Reflex.Network
 
@@ -120,9 +121,11 @@ startSession exit cmd args caps rootDir targets = mdo
 
   -- Start watching the root directory for changes
   hsEvents <- watchHSDirectory absRootDir
-  docModify <- performEvent (liftIO . fsNotifyToRequest <$> hsEvents)
+  docModify <- performEvent (liftIO . fsNotifyToRequest sendOpen <$> attachPromptlyDyn openFiles hsEvents)
   -- Make an event which can be triggered manually
   (messageIn, sendMessage) <- mkMessageIn
+
+  (open_e, sendOpen) <- newTriggerEvent
 
   let in_message = leftmost [messageIn, mapMaybe id docModify]
 
@@ -141,7 +144,16 @@ startSession exit cmd args caps rootDir targets = mdo
   -- Open all files as specified by the target
   liftIO $ do
     iniFiles <-  concatMapM (pathToFiles absRootDir) targets
-    mapM_ (\iniFile -> sendMessage =<< (openFile iniFile)) iniFiles
+    -- Choose one to get things going, further files are opened when
+    -- fsnotify says they have changed.
+    case iniFiles of
+      [] -> return ()
+      (f:_) -> sendOpen f
+
+  openFiles <- foldDyn Set.insert Set.empty opened_files
+
+  let do_open f = openFile f >>= (f <$) . sendMessage
+  opened_files <- performEvent (liftIO . do_open <$> open_e)
 
   st <- mkClientState sendMessage in_message
 
@@ -193,19 +205,25 @@ renderProgress rhead mm mp = p <> rhead <> m
 mkInitialiseRequest :: InitializeParams -> (LspId -> FromClientMessage)
 mkInitialiseRequest p i = ReqInitialize (RequestMessage "2.0" i Initialize p)
 
-fsNotifyToRequest :: FS.Event -> IO (Maybe (LspId -> FromClientMessage))
-fsNotifyToRequest e = do
-  mt <- readFileRetry (FS.eventPath e)
+fsNotifyToRequest :: (FilePath -> IO ()) -> (Set.Set FilePath, FS.Event) -> IO (Maybe (LspId -> FromClientMessage))
+fsNotifyToRequest open_not (os, e) = do
+  let fp = FS.eventPath e
+  mt <- readFileRetry fp
   case mt of
     Nothing -> return Nothing
-    Just t ->
-  -- HACK, shouldn't use IdInt like this but need to increment the version
-  -- each time.
-      return $ Just $ \(IdInt i) -> NotDidChangeTextDocument (NotificationMessage "2.0" TextDocumentDidChange
-        (DidChangeTextDocumentParams
-          (VersionedTextDocumentIdentifier (filePathToUri (FS.eventPath e)) (Just i))
-          (List [TextDocumentContentChangeEvent Nothing Nothing t])
-        ))
+    Just t
+      | fp `Set.member` os ->
+          -- HACK, shouldn't use IdInt like this but need to increment the version
+          -- each time.
+           return $ Just $ \(IdInt i) -> NotDidChangeTextDocument (NotificationMessage "2.0" TextDocumentDidChange
+            (DidChangeTextDocumentParams
+              (VersionedTextDocumentIdentifier (filePathToUri (FS.eventPath e)) (Just i))
+              (List [TextDocumentContentChangeEvent Nothing Nothing t])
+            ))
+      | otherwise -> do
+          open_not fp
+          return $ Just $ openFileNot fp t
+
 
 -- Try three times, for a timing issue but then return Nothing if it
 -- doesn't exist still.
@@ -221,9 +239,13 @@ readFileRetry fp =
 openFile :: FilePath -> IO (LspId -> FromClientMessage)
 openFile fp = do
   t <- T.readFile fp
-  return $ \_ -> NotDidOpenTextDocument (NotificationMessage "2.0" TextDocumentDidOpen
-    (DidOpenTextDocumentParams
-      (TextDocumentItem (filePathToUri fp) "haskell" 0 t)))
+  return $ openFileNot fp t
+
+openFileNot :: FilePath -> T.Text -> LspId -> FromClientMessage
+openFileNot fp t _ =
+    NotDidOpenTextDocument (NotificationMessage "2.0" TextDocumentDidOpen
+      (DidOpenTextDocumentParams
+        (TextDocumentItem (filePathToUri fp) "haskell" 0 t)))
 
 mkMessageIn :: TriggerEvent t m
             => m (Event t (LspId -> FromClientMessage)
