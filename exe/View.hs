@@ -115,8 +115,8 @@ debugView
 debugView g = col $ do
   let DebugCollection{debug_out, debug_in, debug_err} = debugCollection g
   fixed 3 $ boxStatic def $ statusDisplay g
-  fixed 20 $ scrollableOutput $ debug_out
-  fixed 20 $ scrollableOutput $ debug_in
+  --fixed 20 $ scrollableOutput $ debug_out
+  --fixed 20 $ scrollableOutput $ debug_in
   stretch $ scrollableOutput $ debug_err
 
 collectOutput
