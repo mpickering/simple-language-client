@@ -113,7 +113,7 @@ debugView
   => Session t
   -> VtyWidget t m ()
 debugView g = col $ do
-  let DebugCollection{debug_out, debug_in, debug_err} = debugCollection g
+  let DebugCollection{debug_err} = debugCollection g
   fixed 3 $ boxStatic def $ statusDisplay g
   --fixed 20 $ scrollableOutput $ debug_out
   --fixed 20 $ scrollableOutput $ debug_in
@@ -242,8 +242,8 @@ scrollable scrollBy imgs = do
         , scrollBy
         ]
       updateLine :: [Int] -> Int -> ScrollEvent -> Int -> Int
-      updateLine hs dh se ix =
-        let maxN = (sum hs - dh)
+      updateLine hs dh' se ix =
+        let maxN = (sum hs - dh')
             steps = scanl' (+) 0 hs
         in
         case se of

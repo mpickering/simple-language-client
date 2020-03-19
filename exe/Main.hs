@@ -167,16 +167,16 @@ mkStatus :: (Reflex t, MonadHold t m, MonadFix m) => LSPProcess t
 mkStatus p = foldDyn update (ProgressStatus "" M.empty) (_process_stdout p)
   where
     update :: FromServerMessage -> ProgressStatus -> ProgressStatus
-    update (NotWorkDoneProgressBegin (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressBeginParams tit mc mm mp)))) (ProgressStatus t ps) =
+    update (NotWorkDoneProgressBegin (NotificationMessage _ _ (ProgressParams tok (WorkDoneProgressBeginParams tit _mc mm mp)))) (ProgressStatus _t ps) =
       ProgressStatus (renderProgress tit mm mp) (M.insert tok tit ps)
-    update (NotWorkDoneProgressReport (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressReportParams mc mm mp)))) prog@(ProgressStatus t ps) =
+    update (NotWorkDoneProgressReport (NotificationMessage _ _ (ProgressParams tok (WorkDoneProgressReportParams _mc mm mp)))) prog@(ProgressStatus _t ps) =
       let mtit = M.lookup tok ps
       in case mtit of
            -- This case should never happen
            Nothing -> prog
            Just tit -> ProgressStatus (renderProgress tit mm mp) ps
 
-    update (NotWorkDoneProgressEnd (NotificationMessage _ _ (ProgressParams tok w@(WorkDoneProgressEndParams mm)))) (ProgressStatus t ps) =
+    update (NotWorkDoneProgressEnd (NotificationMessage _ _ (ProgressParams tok (WorkDoneProgressEndParams _mm)))) (ProgressStatus t ps) =
       let ps' = M.delete tok ps
       in if M.null ps'
           then ProgressStatus "" ps'
@@ -185,7 +185,7 @@ mkStatus p = foldDyn update (ProgressStatus "" M.empty) (_process_stdout p)
     update _ d = d
 
 renderProgress :: T.Text -> Maybe T.Text -> Maybe Double -> T.Text
-renderProgress head mm mp = p <> head <> m
+renderProgress rhead mm mp = p <> rhead <> m
   where
     p = fromMaybe "" ((<> " ") . T.pack . show <$> mp)
     m = fromMaybe "" ((": " <>) <$> mm)
