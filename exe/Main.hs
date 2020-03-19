@@ -257,21 +257,21 @@ ghciArg = ClientArg
     )
   <*> some (argument str
     (
-      help "The directory containing the source files to load"
-      <> metavar "DIR"
+      help "The directories containing the source files to load"
+      <> metavar "DIRS"
     ))
   <*> optional (strOption (long "root-dir" <> help "Path to root dir"))
 
 
-reflexGhcideCaps :: ClientCapabilities
-reflexGhcideCaps = def { _window = Just (WindowClientCapabilities (Just True)) }
+lcCaps :: ClientCapabilities
+lcCaps = def { _window = Just (WindowClientCapabilities (Just True)) }
 
 main :: IO ()
 main = do
   let opts = info (ghciArg <**> helper) $ mconcat
         [ fullDesc
         , progDesc "A language client powered by fsnotify"
-       , header "Welcome to reflex-ghcide"
+       , header "Welcome to simple-language-client"
         ]
   ClientArg { _clientArg_serverCommand = cmd
             , _clientArg_files = file_dir
@@ -281,13 +281,13 @@ main = do
     exit <- (() <$) <$> keyCombo (V.KChar 'c', [V.MCtrl])
     d <- key (V.KChar 'd')
 
-    session <- startSession exit cmd ["--lsp"] reflexGhcideCaps root_dir file_dir
+    session <- startSession exit cmd ["--lsp"] lcCaps root_dir file_dir
 
     let home = col $ do
           stretch $ col $ do
             stretch $ diagnosticsPane session
             fixed 3 $ boxStatic def $ text (current (currentMessage <$> status session))
-            fixed 3 $ boxStatic def $ text "reflex-ghcide: C-c - quit; d - debug"
+            fixed 3 $ boxStatic def $ text "simple-language-client: C-c - quit; d - debug"
           return $ leftmost
             [ Left () <$ d
             ]
