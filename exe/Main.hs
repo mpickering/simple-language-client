@@ -17,9 +17,9 @@ module Main where
 - 4. Display the diagnostics when ghcide reports them
 -}
 import Control.Monad.Extra
-import Data.Maybe
+import Data.Maybe hiding (mapMaybe)
 import Language.Haskell.LSP.Messages
-import Language.Haskell.LSP.Types
+import Language.Haskell.LSP.Types hiding (_workspace)
 import Data.Default
 import Reflex
 import qualified System.Posix.Process
@@ -124,7 +124,7 @@ startSession exit cmd args caps rootDir targets = mdo
   -- Make an event which can be triggered manually
   (messageIn, sendMessage) <- mkMessageIn
 
-  let in_message = leftmost [messageIn, docModify]
+  let in_message = leftmost [messageIn, mapMaybe id docModify]
 
   let process =  proc cmd args
       processConfig =
@@ -193,24 +193,29 @@ renderProgress rhead mm mp = p <> rhead <> m
 mkInitialiseRequest :: InitializeParams -> (LspId -> FromClientMessage)
 mkInitialiseRequest p i = ReqInitialize (RequestMessage "2.0" i Initialize p)
 
-fsNotifyToRequest :: FS.Event -> IO (LspId -> FromClientMessage)
+fsNotifyToRequest :: FS.Event -> IO (Maybe (LspId -> FromClientMessage))
 fsNotifyToRequest e = do
-  t <- readFileRetry (FS.eventPath e)
+  mt <- readFileRetry (FS.eventPath e)
+  case mt of
+    Nothing -> return Nothing
+    Just t ->
   -- HACK, shouldn't use IdInt like this but need to increment the version
   -- each time.
-  return $ \(IdInt i) -> NotDidChangeTextDocument (NotificationMessage "2.0" TextDocumentDidChange
-    (DidChangeTextDocumentParams
-      (VersionedTextDocumentIdentifier (filePathToUri (FS.eventPath e)) (Just i))
-      (List [TextDocumentContentChangeEvent Nothing Nothing t])
-      ))
+      return $ Just $ \(IdInt i) -> NotDidChangeTextDocument (NotificationMessage "2.0" TextDocumentDidChange
+        (DidChangeTextDocumentParams
+          (VersionedTextDocumentIdentifier (filePathToUri (FS.eventPath e)) (Just i))
+          (List [TextDocumentContentChangeEvent Nothing Nothing t])
+        ))
 
-
-readFileRetry :: FilePath -> IO T.Text
+-- Try three times, for a timing issue but then return Nothing if it
+-- doesn't exist still.
+readFileRetry :: FilePath -> IO (Maybe T.Text)
 readFileRetry fp =
   let policy = limitRetries 3
-  in recovering policy
-             [\_ -> Handler (\(_e :: IOException) -> return True)]
-             (\_ -> T.readFile fp)
+      retry_act = recovering policy
+                    [\_ -> Handler (\(_e :: IOException) -> return True)]
+                    (\_ -> T.readFile fp)
+  in (Just <$> retry_act) `catch` (\(_ :: IOException) -> return Nothing)
 
 
 openFile :: FilePath -> IO (LspId -> FromClientMessage)
