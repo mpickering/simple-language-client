@@ -5,6 +5,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecordWildCards #-}
 module Main where
 
 
@@ -37,6 +38,7 @@ import System.Posix.Signals
 import Control.Retry
 import Control.Monad.Catch (Handler(..))
 
+
 import Control.Exception hiding (Handler(..))
 
 import Reflex.Vty
@@ -45,6 +47,8 @@ import qualified Graphics.Vty.Input as V
 import qualified Data.Text.IO as T
 import qualified Data.Map as M
 import qualified Data.Set as Set
+import qualified Data.Aeson as A
+import qualified Data.Foldable as F
 
 import Reflex.Network
 
@@ -86,7 +90,7 @@ watchHSDirectory absRootDir = do
   -- Watch the project directory for changes
   pb <- getPostBuild
   fsEvents <- watchDirectory (noDebounce FS.defaultConfig) (absRootDir <$ pb)
-
+  -- Should use the watched files to perform the filtering
   let filteredFsEvents = flip ffilter fsEvents $ \e ->
         takeExtension (FS.eventPath e) `elem` [".hs", ".lhs"]
   return filteredFsEvents
@@ -195,6 +199,19 @@ mkStatus p = foldDyn update (ProgressStatus "" M.empty) (_process_stdout p)
           else ProgressStatus t ps
 
     update _ d = d
+
+
+getNewWatcher :: FromServerMessage -> [FileSystemWatcher]
+getNewWatcher (ReqRegisterCapability (RequestMessage _t _i _m (RegistrationParams rs))) =
+  concat $ mapMaybe processRegistration (F.toList rs)
+  where
+    processRegistration :: Registration -> Maybe [FileSystemWatcher]
+    processRegistration (Registration _rid WorkspaceDidChangeWatchedFiles (Just args)) =
+      case A.fromJSON args of
+        A.Error _s -> Nothing
+        A.Success (DidChangeWatchedFilesRegistrationOptions { watchers = List ws })
+          -> Just ws
+getNewWatcher _ = []
 
 renderProgress :: T.Text -> Maybe T.Text -> Maybe Double -> T.Text
 renderProgress rhead mm mp = p <> rhead <> m
@@ -328,3 +345,43 @@ main = do
 
 noDebounce :: FS.WatchConfig -> FS.WatchConfig
 noDebounce cfg = cfg { FS.confDebounce = FS.NoDebounce }
+
+
+---
+--------------------------------------------------------------------------------------------------
+-- The message definitions below probably belong in haskell-lsp-types
+-- Copied from ghcide
+
+data DidChangeWatchedFilesRegistrationOptions = DidChangeWatchedFilesRegistrationOptions
+    { watchers :: List FileSystemWatcher
+    }
+
+instance A.ToJSON DidChangeWatchedFilesRegistrationOptions where
+  toJSON DidChangeWatchedFilesRegistrationOptions {..} =
+    A.object ["watchers" A..= watchers]
+
+instance A.FromJSON DidChangeWatchedFilesRegistrationOptions where
+  parseJSON =
+    A.withObject "didChange"
+      (\o ->  DidChangeWatchedFilesRegistrationOptions <$> (o A..: "watchers"))
+
+data FileSystemWatcher = FileSystemWatcher
+    { -- | The glob pattern to watch.
+      --   For details on glob pattern syntax, check the spec: https://microsoft.github.io/language-server-protocol/specifications/specification-3-14/#workspace_didChangeWatchedFiles
+      globPattern :: String
+        -- | The kind of event to subscribe to. Defaults to all.
+        --   Defined as a bitmap of Create(1), Change(2), and Delete(4)
+    , kind        :: Maybe Int
+    }
+
+instance A.ToJSON FileSystemWatcher where
+  toJSON FileSystemWatcher {..} =
+    A.object
+      $  ["globPattern" A..= globPattern]
+      ++ [ "kind" A..= x | Just x <- [kind] ]
+
+instance A.FromJSON FileSystemWatcher where
+  parseJSON = A.withObject "watcher"  (\o -> FileSystemWatcher <$> o A..: "globPattern"
+                                                               <*> o A..:? "kind" )
+
+
